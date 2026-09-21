@@ -130,9 +130,9 @@
         <div><label>脂肪g</label><input id="dF" type="number" inputmode="decimal"></div>
       </div>
       <label>备注（可选）</label><input id="dNote" placeholder="如 标签换算/估算">
-      <label>拍照留证（可选，可多张，只存本机）</label>
+      <label>拍照/相册留证（可选，可多张，只存本机）</label>
       <input type="file" id="dPhotos" accept="image/*" multiple>
-      <div class="thumbs" id="dPhotoPrev"></div>
+      <div class="thumbs" id="dietPhotoPrev"></div>
       <button class="btn" onclick="addDiet()">记一笔饮食</button>
     </div>
     <div class="card"><h3>当日饮食</h3><div id="dietList"></div></div>
@@ -156,6 +156,9 @@
         <div></div>
       </div>
       <label>备注（可选）</label><input id="eNote" placeholder="如 步数/心率/手表读数">
+      <label>拍照/相册留证（可选，可多张，只存本机）</label>
+      <input type="file" id="ePhotos" accept="image/*" multiple>
+      <div class="thumbs" id="exPhotoPrev"></div>
       <button class="btn" onclick="addEx()">记一笔运动</button>
     </div>
     <div class="card"><h3>当日运动</h3><div id="exList"></div></div>
@@ -186,6 +189,10 @@
         <div></div>
       </div>
       <label>备注（如睡眠分段/经期第几天）</label><textarea id="yNote"></textarea>
+      <label>拍照/相册留证（可选，可多张，只存本机；如睡眠截图/手环读数）</label>
+      <input type="file" id="yPhotos" accept="image/*" multiple>
+      <div class="thumbs" id="dailyPhotoPrev"></div>
+      <button class="mini" style="margin:0 0 8px" onclick="viewPhotos('daily:'+curDate)">查看已存照片<span id="dailyPhotoCount"></span></button>
       <button class="btn" onclick="saveDaily()">保存当日状态</button>
     </div>
   </section>
@@ -203,6 +210,10 @@
         <div><label>BMI</label><input id="bBmi" type="number" step="0.1" inputmode="decimal"></div>
       </div>
       <label>备注（如 晨起空腹练前 / 晚上练中经前）</label><textarea id="bNote"></textarea>
+      <label>拍照/相册留证（可选，可多张，只存本机；如体脂秤截图）</label>
+      <input type="file" id="bPhotos" accept="image/*" multiple>
+      <div class="thumbs" id="bodyPhotoPrev"></div>
+      <button class="mini" style="margin:0 0 8px" onclick="viewPhotos('body:'+curDate)">查看已存照片<span id="bodyPhotoCount"></span></button>
       <button class="btn" onclick="saveBody()">保存当日身体数据</button>
       <p class="muted" style="margin-top:8px">提醒：只有「晨起空腹+练前」的测量才用于对比和调目标，其他条件请在备注写明。</p>
     </div>
@@ -212,7 +223,7 @@
   <section id="tab-sync" class="hidden">
     <div class="card">
       <h3>同步到电脑台账</h3>
-      <p class="muted" style="margin-bottom:8px">数据存在本机浏览器里，电脑休眠也能记。电脑上线后：点「生成同步文本」→「复制」→ 粘贴发给小Q，即可入台账。带「照片n」标记的记录：同步后把对应照片在聊天里补发（注明日期＋餐次），小Q会读标签/份量核对修正。</p>
+      <p class="muted" style="margin-bottom:8px">数据存在本机浏览器里，电脑休眠也能记。电脑上线后：点「生成同步文本」→「复制」→ 粘贴发给小Q，即可入台账。饮食/运动/每日/身体四类都可拍照或从相册选图，照片只存本机；带「照片n」标记的记录：同步后把对应照片在聊天里补发（注明日期＋类别），小Q会读标签/份量核对修正。</p>
       <button class="btn" onclick="genSync()">生成同步文本</button>
       <pre id="syncOut" style="margin-top:10px">（尚未生成）</pre>
       <button class="btn sec" onclick="copySync()">复制同步文本</button>
@@ -264,14 +275,16 @@ function save(){ localStorage.setItem(LS, JSON.stringify(DB)); }
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 function num(v){ v = parseFloat(v); return isNaN(v) ? 0 : v; }
 
-var pendingPhotos = [];
+var pending = { diet: [], ex: [], daily: [], body: [] };
+var photoCounts = {};
 function idb(){ return new Promise(function(res, rej){ var r = indexedDB.open("hlt_photos", 1); r.onupgradeneeded = function(){ r.result.createObjectStore("photos", { keyPath: "id" }); }; r.onsuccess = function(){ res(r.result); }; r.onerror = function(){ rej(r.error); }; }); }
 function idbPut(rec){ return idb().then(function(db){ return new Promise(function(res){ var t = db.transaction("photos", "readwrite"); t.objectStore("photos").put(rec); t.oncomplete = function(){ res(); }; }); }); }
 function idbByEntry(eid){ return idb().then(function(db){ return new Promise(function(res){ var q = db.transaction("photos").objectStore("photos").getAll(); q.onsuccess = function(){ res(q.result.filter(function(r){ return r.entryId === eid; })); }; }); }); }
 function idbDel(id){ return idb().then(function(db){ return new Promise(function(res){ var t = db.transaction("photos", "readwrite"); t.objectStore("photos").delete(id); t.oncomplete = function(){ res(); }; }); }); }
 function fileToThumb(file){ return new Promise(function(res){ var fr = new FileReader(); fr.onload = function(){ var img = new Image(); img.onload = function(){ var sc = Math.min(1, 1000/Math.max(img.width, img.height)); var c = document.createElement("canvas"); c.width = Math.max(1, Math.round(img.width*sc)); c.height = Math.max(1, Math.round(img.height*sc)); c.getContext("2d").drawImage(img, 0, 0, c.width, c.height); res(c.toDataURL("image/jpeg", 0.72)); }; img.src = fr.result; }; fr.readAsDataURL(file); }); }
-function onPhotos(inp){ var files = Array.prototype.slice.call(inp.files); if (!files.length) return; Promise.all(files.map(fileToThumb)).then(function(arr){ pendingPhotos = pendingPhotos.concat(arr); renderPhotoPrev(); }); inp.value = ""; }
-function renderPhotoPrev(){ $("dPhotoPrev").innerHTML = pendingPhotos.map(function(d, i){ return '<img src="'+d+'" onclick="pendingPhotos.splice('+i+',1);renderPhotoPrev()">'; }).join(""); }
+function onPhotos(inp, key){ var files = Array.prototype.slice.call(inp.files); if (!files.length) return; Promise.all(files.map(fileToThumb)).then(function(arr){ pending[key] = pending[key].concat(arr); renderPhotoPrev(key); }); inp.value = ""; }
+function renderPhotoPrev(key){ var el = $(key+"PhotoPrev"); if (!el) return; el.innerHTML = pending[key].map(function(d, i){ return '<img src="'+d+'" onclick="dropPhoto(&quot;'+key+'&quot;,'+i+')">'; }).join(""); }
+function dropPhoto(key, i){ pending[key].splice(i, 1); renderPhotoPrev(key); }
 var lbQueue = [], lbIdx = 0;
 function viewPhotos(eid){ idbByEntry(eid).then(function(rs){ if (!rs.length){ alert("照片未找到（可能已随浏览器数据被清）"); return; } lbQueue = rs; lbIdx = 0; $("lbImg").src = lbQueue[0].data; $("lightbox").classList.remove("hidden"); }); }
 function lbNext(){ if (!lbQueue.length) return; lbIdx = (lbIdx+1) % lbQueue.length; $("lbImg").src = lbQueue[lbIdx].data; }
@@ -343,35 +356,43 @@ function addDiet(){
   if (!food){ alert("填一下食物名称"); return; }
   var e = { id: uid(), date: curDate, meal: $("dMeal").value, food: food,
     kcal: num($("dKcal").value), p: num($("dP").value), c: num($("dC").value), f: num($("dF").value),
-    note: $("dNote").value.trim(), synced: false, photos: pendingPhotos.length };
-  var shots = pendingPhotos.slice();
+    note: $("dNote").value.trim(), synced: false, photos: pending.diet.length };
+  var shots = pending.diet.slice();
   DB.diet.push(e);
   ["dFood","dKcal","dP","dC","dF","dNote"].forEach(function(i){ $(i).value=""; });
-  pendingPhotos = []; renderPhotoPrev();
+  pending.diet = []; renderPhotoPrev("diet");
   shots.forEach(function(d){ idbPut({ id: uid(), entryId: e.id, date: e.date, data: d }); });
   save(); renderAll();
 }
 function addEx(){
   var type = $("eType").value.trim();
   if (!type){ alert("填一下运动项目"); return; }
-  DB.ex.push({ id: uid(), date: curDate, type: type, min: num($("eMin").value), int: $("eInt").value,
-    kcal: num($("eKcal").value), note: $("eNote").value.trim(), synced: false });
+  var e = { id: uid(), date: curDate, type: type, min: num($("eMin").value), int: $("eInt").value,
+    kcal: num($("eKcal").value), note: $("eNote").value.trim(), synced: false, photos: pending.ex.length };
+  var shots = pending.ex.slice();
+  DB.ex.push(e);
   ["eType","eMin","eKcal","eNote"].forEach(function(i){ $(i).value=""; });
+  pending.ex = []; renderPhotoPrev("ex");
+  shots.forEach(function(d){ idbPut({ id: uid(), entryId: e.id, date: e.date, data: d }); });
   save(); renderAll();
 }
 function delDiet(id){ idbByEntry(id).then(function(rs){ rs.forEach(function(r){ idbDel(r.id); }); }); DB.diet = DB.diet.filter(function(x){ return x.id !== id; }); save(); renderAll(); }
-function delEx(id){ DB.ex = DB.ex.filter(function(x){ return x.id !== id; }); save(); renderAll(); }
+function delEx(id){ idbByEntry(id).then(function(rs){ rs.forEach(function(r){ idbDel(r.id); }); }); DB.ex = DB.ex.filter(function(x){ return x.id !== id; }); save(); renderAll(); }
 
 function addWater(ml){ $("yWater").value = num($("yWater").value) + ml; }
 function saveDaily(){
   DB.daily[curDate] = { sleep_h: num($("ySleep").value), quality: $("yQual").value, water_ml: num($("yWater").value),
     resting_hr: num($("yHr").value), mood: $("yMood").value.trim(), bowel: $("yBowel").value.trim(),
     note: $("yNote").value.trim(), dirty: true };
+  var shots = pending.daily.slice(); pending.daily = []; renderPhotoPrev("daily");
+  shots.forEach(function(d){ idbPut({ id: uid(), entryId: "daily:"+curDate, date: curDate, data: d }); });
   save(); renderAll(); alert("已保存 "+curDate+" 状态");
 }
 function saveBody(){
   DB.body[curDate] = { weight_kg: num($("bW").value), body_fat_pct: num($("bF").value), waist_cm: num($("bWaist").value),
     bmi: num($("bBmi").value), note: $("bNote").value.trim(), dirty: true };
+  var shots = pending.body.slice(); pending.body = []; renderPhotoPrev("body");
+  shots.forEach(function(d){ idbPut({ id: uid(), entryId: "body:"+curDate, date: curDate, data: d }); });
   save(); renderAll(); alert("已保存 "+curDate+" 身体数据");
 }
 function loadDailyForm(){
@@ -419,6 +440,7 @@ function renderLists(){
   h = "";
   DB.ex.filter(function(x){ return x.date === curDate; }).forEach(function(x){
     h += '<div class="entry"><div class="txt">'+x.type+"　"+x.min+"min / "+x.int+" / "+fmt(x.kcal)+" kcal"+
+      (x.photos ? '　<button class="mini" style="padding:2px 8px;font-size:12px" onclick="viewPhotos(&quot;'+x.id+'&quot;)">照片'+x.photos+"</button>" : "")+
       (x.note ? '<br><span class="muted">'+x.note+"</span>" : "")+(x.synced ? "" : '　<span class="muted">[未同步]</span>')+
       '</div><button class="del" onclick="delEx(\''+x.id+'\')">删</button></div>';
   });
@@ -432,7 +454,13 @@ function unsyncCount(){
   Object.keys(DB.body).forEach(function(k){ if (DB.body[k].dirty) n++; });
   return n;
 }
-function renderAll(){ renderSum(); renderLists(); }
+function refreshPhotoCounts(){
+  ["daily", "body"].forEach(function(k){
+    var key = k+":"+curDate;
+    idbByEntry(key).then(function(rs){ photoCounts[key] = rs.length; var el = $(k+"PhotoCount"); if (el) el.textContent = rs.length ? "（"+rs.length+"张）" : ""; });
+  });
+}
+function renderAll(){ renderSum(); renderLists(); refreshPhotoCounts(); }
 
 var lastSyncText = "";
 function genSync(){
@@ -442,15 +470,15 @@ function genSync(){
     L.push("[饮食] "+x.date+" "+x.meal+" "+x.food+" | "+fmt(x.kcal)+" kcal | P"+fmt(x.p)+" | C"+fmt(x.c)+" | F"+fmt(x.f)+" | "+(x.note||"")+(x.photos ? " | 附"+x.photos+"张照片待聊天补发核对" : ""));
   });
   DB.ex.filter(function(x){ return !x.synced; }).forEach(function(x){
-    L.push("[运动] "+x.date+" "+x.type+" | "+x.min+"min | "+x.int+" | "+fmt(x.kcal)+" kcal | "+(x.note||""));
+    L.push("[运动] "+x.date+" "+x.type+" | "+x.min+"min | "+x.int+" | "+fmt(x.kcal)+" kcal | "+(x.note||"")+(x.photos ? " | 附"+x.photos+"张照片待聊天补发核对" : ""));
   });
   Object.keys(DB.daily).sort().forEach(function(k){
     var d = DB.daily[k]; if (!d.dirty) return;
-    L.push("[每日] "+k+" | 睡眠"+(d.sleep_h||0)+"h | "+(d.quality||"")+" | 白水"+(d.water_ml||0)+"ml | 静息"+(d.resting_hr||"")+" | "+(d.mood||"")+" | "+(d.bowel||"")+" | "+(d.note||""));
+    L.push("[每日] "+k+" | 睡眠"+(d.sleep_h||0)+"h | "+(d.quality||"")+" | 白水"+(d.water_ml||0)+"ml | 静息"+(d.resting_hr||"")+" | "+(d.mood||"")+" | "+(d.bowel||"")+" | "+(d.note||"")+((photoCounts["daily:"+k]||0) ? " | 附"+photoCounts["daily:"+k]+"张照片待聊天补发核对" : ""));
   });
   Object.keys(DB.body).sort().forEach(function(k){
     var b = DB.body[k]; if (!b.dirty) return;
-    L.push("[身体] "+k+" | 体重"+(b.weight_kg||0)+" | 体脂"+(b.body_fat_pct||0)+" | 腰"+(b.waist_cm||"")+" | BMI"+(b.bmi||"")+" | "+(b.note||""));
+    L.push("[身体] "+k+" | 体重"+(b.weight_kg||0)+" | 体脂"+(b.body_fat_pct||0)+" | 腰"+(b.waist_cm||"")+" | BMI"+(b.bmi||"")+" | "+(b.note||"")+((photoCounts["body:"+k]||0) ? " | 附"+photoCounts["body:"+k]+"张照片待聊天补发核对" : ""));
   });
   if (L.length === 1) L.push("（没有未同步的记录）");
   lastSyncText = L.join("\n");
@@ -506,7 +534,10 @@ $("dayRest").addEventListener("click", function(){ curDay="rest"; this.classList
 $("dayTrain").addEventListener("click", function(){ curDay="train"; this.classList.add("on"); $("dayRest").classList.remove("on"); renderSum(); });
 
 $("date").value = curDate;
-$("dPhotos").addEventListener("change", function(){ onPhotos(this); });
+$("dPhotos").addEventListener("change", function(){ onPhotos(this, "diet"); });
+$("ePhotos").addEventListener("change", function(){ onPhotos(this, "ex"); });
+$("yPhotos").addEventListener("change", function(){ onPhotos(this, "daily"); });
+$("bPhotos").addEventListener("change", function(){ onPhotos(this, "body"); });
 renderChips(); loadDailyForm(); renderAll();
 </script>
 </body>
