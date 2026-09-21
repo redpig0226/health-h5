@@ -84,6 +84,11 @@
     white-space: pre-wrap; word-break: break-all; min-height: 60px;
     font-family: ui-monospace, Menlo, Consolas, monospace;
   }
+  .thumbs { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .thumbs img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid #d5ddd8; }
+  #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 99; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+  #lightbox img { max-width: 92vw; max-height: 78vh; border-radius: 8px; }
+  #lightbox button { width: 140px; margin-top: 0; }
   .hidden { display: none; }
   .waterRow { display: flex; gap: 6px; align-items: center; }
   .waterRow input { flex: 1; }
@@ -124,6 +129,9 @@
         <div><label>脂肪g</label><input id="dF" type="number" inputmode="decimal"></div>
       </div>
       <label>备注（可选）</label><input id="dNote" placeholder="如 标签换算/估算">
+      <label>拍照留证（可选，可多张，只存本机）</label>
+      <input type="file" id="dPhotos" accept="image/*" multiple>
+      <div class="thumbs" id="dPhotoPrev"></div>
       <button class="btn" onclick="addDiet()">记一笔饮食</button>
     </div>
     <div class="card"><h3>当日饮食</h3><div id="dietList"></div></div>
@@ -203,7 +211,7 @@
   <section id="tab-sync" class="hidden">
     <div class="card">
       <h3>同步到电脑台账</h3>
-      <p class="muted" style="margin-bottom:8px">数据存在本机浏览器里，电脑休眠也能记。电脑上线后：点「生成同步文本」→「复制」→ 粘贴发给小Q，即可入台账。</p>
+      <p class="muted" style="margin-bottom:8px">数据存在本机浏览器里，电脑休眠也能记。电脑上线后：点「生成同步文本」→「复制」→ 粘贴发给小Q，即可入台账。带「照片n」标记的记录：同步后把对应照片在聊天里补发（注明日期＋餐次），小Q会读标签/份量核对修正。</p>
       <button class="btn" onclick="genSync()">生成同步文本</button>
       <pre id="syncOut" style="margin-top:10px">（尚未生成）</pre>
       <button class="btn sec" onclick="copySync()">复制同步文本</button>
@@ -211,7 +219,7 @@
     </div>
     <div class="card">
       <h3>备份 / 恢复</h3>
-      <p class="muted" style="margin-bottom:8px">换手机或清浏览器前先导出 JSON 备份；新环境用导入恢复。</p>
+      <p class="muted" style="margin-bottom:8px">换手机或清浏览器前先导出 JSON 备份；新环境用导入恢复。注意：备份不含照片，照片只存本机浏览器。</p>
       <button class="btn sec" onclick="exportJson()">导出备份 JSON</button>
       <button class="btn sec" onclick="document.getElementById('impFile').click()">导入备份 JSON</button>
       <input type="file" id="impFile" accept=".json,application/json" class="hidden" onchange="importJson(this)">
@@ -238,6 +246,11 @@
   <button data-t="sync">同步<span id="syncBadge"></span></button>
 </nav>
 
+<div id="lightbox" class="hidden" onclick="closeLightbox(event)">
+  <img id="lbImg" src="" onclick="event.stopPropagation(); lbNext()">
+  <button class="btn sec" onclick="closeLightbox()">关闭（点图片看下一张）</button>
+</div>
+
 <script>
 "use strict";
 var LS = "hlt_v1";
@@ -249,6 +262,19 @@ function load(){
 function save(){ localStorage.setItem(LS, JSON.stringify(DB)); }
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 function num(v){ v = parseFloat(v); return isNaN(v) ? 0 : v; }
+
+var pendingPhotos = [];
+function idb(){ return new Promise(function(res, rej){ var r = indexedDB.open("hlt_photos", 1); r.onupgradeneeded = function(){ r.result.createObjectStore("photos", { keyPath: "id" }); }; r.onsuccess = function(){ res(r.result); }; r.onerror = function(){ rej(r.error); }; }); }
+function idbPut(rec){ return idb().then(function(db){ return new Promise(function(res){ var t = db.transaction("photos", "readwrite"); t.objectStore("photos").put(rec); t.oncomplete = function(){ res(); }; }); }); }
+function idbByEntry(eid){ return idb().then(function(db){ return new Promise(function(res){ var q = db.transaction("photos").objectStore("photos").getAll(); q.onsuccess = function(){ res(q.result.filter(function(r){ return r.entryId === eid; })); }; }); }); }
+function idbDel(id){ return idb().then(function(db){ return new Promise(function(res){ var t = db.transaction("photos", "readwrite"); t.objectStore("photos").delete(id); t.oncomplete = function(){ res(); }; }); }); }
+function fileToThumb(file){ return new Promise(function(res){ var fr = new FileReader(); fr.onload = function(){ var img = new Image(); img.onload = function(){ var sc = Math.min(1, 1000/Math.max(img.width, img.height)); var c = document.createElement("canvas"); c.width = Math.max(1, Math.round(img.width*sc)); c.height = Math.max(1, Math.round(img.height*sc)); c.getContext("2d").drawImage(img, 0, 0, c.width, c.height); res(c.toDataURL("image/jpeg", 0.72)); }; img.src = fr.result; }; fr.readAsDataURL(file); }); }
+function onPhotos(inp){ var files = Array.prototype.slice.call(inp.files); if (!files.length) return; Promise.all(files.map(fileToThumb)).then(function(arr){ pendingPhotos = pendingPhotos.concat(arr); renderPhotoPrev(); }); inp.value = ""; }
+function renderPhotoPrev(){ $("dPhotoPrev").innerHTML = pendingPhotos.map(function(d, i){ return '<img src="'+d+'" onclick="pendingPhotos.splice('+i+',1);renderPhotoPrev()">'; }).join(""); }
+var lbQueue = [], lbIdx = 0;
+function viewPhotos(eid){ idbByEntry(eid).then(function(rs){ if (!rs.length){ alert("照片未找到（可能已随浏览器数据被清）"); return; } lbQueue = rs; lbIdx = 0; $("lbImg").src = lbQueue[0].data; $("lightbox").classList.remove("hidden"); }); }
+function lbNext(){ if (!lbQueue.length) return; lbIdx = (lbIdx+1) % lbQueue.length; $("lbImg").src = lbQueue[lbIdx].data; }
+function closeLightbox(ev){ if (ev && ev.target !== $("lightbox")) return; $("lightbox").classList.add("hidden"); }
 function today(){ var d = new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 
 var TARGETS = {
@@ -313,10 +339,14 @@ function tapEx(i){
 function addDiet(){
   var food = $("dFood").value.trim();
   if (!food){ alert("填一下食物名称"); return; }
-  DB.diet.push({ id: uid(), date: curDate, meal: $("dMeal").value, food: food,
+  var e = { id: uid(), date: curDate, meal: $("dMeal").value, food: food,
     kcal: num($("dKcal").value), p: num($("dP").value), c: num($("dC").value), f: num($("dF").value),
-    note: $("dNote").value.trim(), synced: false });
+    note: $("dNote").value.trim(), synced: false, photos: pendingPhotos.length };
+  var shots = pendingPhotos.slice();
+  DB.diet.push(e);
   ["dFood","dKcal","dP","dC","dF","dNote"].forEach(function(i){ $(i).value=""; });
+  pendingPhotos = []; renderPhotoPrev();
+  shots.forEach(function(d){ idbPut({ id: uid(), entryId: e.id, date: e.date, data: d }); });
   save(); renderAll();
 }
 function addEx(){
@@ -327,7 +357,7 @@ function addEx(){
   ["eType","eMin","eKcal","eNote"].forEach(function(i){ $(i).value=""; });
   save(); renderAll();
 }
-function delDiet(id){ DB.diet = DB.diet.filter(function(x){ return x.id !== id; }); save(); renderAll(); }
+function delDiet(id){ idbByEntry(id).then(function(rs){ rs.forEach(function(r){ idbDel(r.id); }); }); DB.diet = DB.diet.filter(function(x){ return x.id !== id; }); save(); renderAll(); }
 function delEx(id){ DB.ex = DB.ex.filter(function(x){ return x.id !== id; }); save(); renderAll(); }
 
 function addWater(ml){ $("yWater").value = num($("yWater").value) + ml; }
@@ -379,6 +409,7 @@ function renderLists(){
   var h = "";
   DB.diet.filter(function(x){ return x.date === curDate; }).forEach(function(x){
     h += '<div class="entry"><div class="txt">'+x.meal+"　"+x.food+"　"+fmt(x.kcal)+" kcal / P"+fmt(x.p)+" / C"+fmt(x.c)+" / F"+fmt(x.f)+
+      (x.photos ? '　<button class="mini" style="padding:2px 8px;font-size:12px" onclick="viewPhotos(\''+x.id+'\')">照片'+x.photos+"</button>" : "")+
       (x.note ? '<br><span class="muted">'+x.note+"</span>" : "")+(x.synced ? "" : '　<span class="muted">[未同步]</span>')+
       '</div><button class="del" onclick="delDiet(\''+x.id+'\')">删</button></div>';
   });
@@ -406,7 +437,7 @@ function genSync(){
   var L = [];
   L.push("=== 健康同步 H5 ===");
   DB.diet.filter(function(x){ return !x.synced; }).forEach(function(x){
-    L.push("[饮食] "+x.date+" "+x.meal+" "+x.food+" | "+fmt(x.kcal)+" kcal | P"+fmt(x.p)+" | C"+fmt(x.c)+" | F"+fmt(x.f)+" | "+(x.note||""));
+    L.push("[饮食] "+x.date+" "+x.meal+" "+x.food+" | "+fmt(x.kcal)+" kcal | P"+fmt(x.p)+" | C"+fmt(x.c)+" | F"+fmt(x.f)+" | "+(x.note||"")+(x.photos ? " | 附"+x.photos+"张照片待聊天补发核对" : ""));
   });
   DB.ex.filter(function(x){ return !x.synced; }).forEach(function(x){
     L.push("[运动] "+x.date+" "+x.type+" | "+x.min+"min | "+x.int+" | "+fmt(x.kcal)+" kcal | "+(x.note||""));
@@ -473,6 +504,7 @@ $("dayRest").addEventListener("click", function(){ curDay="rest"; this.classList
 $("dayTrain").addEventListener("click", function(){ curDay="train"; this.classList.add("on"); $("dayRest").classList.remove("on"); renderSum(); });
 
 $("date").value = curDate;
+$("dPhotos").addEventListener("change", function(){ onPhotos(this); });
 renderChips(); loadDailyForm(); renderAll();
 </script>
 </body>
