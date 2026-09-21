@@ -557,6 +557,14 @@ function renderAdvice(){
   var top = relGaps[0], low = relGaps[relGaps.length-1];
   if (top.rel > 0.25) msgs.push(top.name+"缺口相对最大（还差下限的"+fmt(top.rel*100)+"%），选食优先补"+top.name+"。");
   if (low.name === "脂肪" && low.rel < 0.25 && top.name !== "脂肪") msgs.push("脂肪预算余量紧张，避开油炸/奶油/坚果类。");
+  var mealOrder = ["早饭","午饭","晚饭","加餐","饮品"], mealSum = {};
+  DB.diet.forEach(function(x){ if (x.date === curDate) mealSum[x.meal] = (mealSum[x.meal]||0) + x.kcal; });
+  if (s.kcal > 0) {
+    var parts = mealOrder.filter(function(m){ return mealSum[m]; }).map(function(m){ return m+fmt(mealSum[m])+"("+fmt(mealSum[m]/s.kcal*100)+"%)"; });
+    h += '<p class="muted" style="margin:4px 0">分餐：'+parts.join(" / ")+'</p>';
+    var dr = (mealSum["晚饭"]||0)/s.kcal;
+    if (dr > 0.45) msgs.push("晚饭热量占比"+fmt(dr*100)+"%偏高，明天试着把一部分挪到午餐或白天。");
+  }
   var mealNow = lateNight ? "加餐" : hour < 10 ? "早饭" : hour < 14 ? "午饭" : hour < 17 ? "加餐" : "晚饭";
   var scored = DIET_TPL.map(function(tp, i){
     var it = { kcal: tp[1], p: tp[2], c: tp[3], f: tp[4] };
@@ -631,7 +639,26 @@ function renderAna(){
   if (mp){ h += '<h3>三大营养素平均（已记天）</h3><p class="muted">蛋白 '+fmt(mp.p)+'（休息95–105 / 训练108–115）<br>脂肪 '+fmt(mp.f)+'（休息42–50 / 训练45–52）<br>碳水 '+fmt(mp.c)+'（休息110–140 / 训练150–175）</p>'; }
   var weeks = {}; rows.forEach(function(r){ if(!r.has) return; var dt = new Date(r.d); var wd = (dt.getDay()+6)%7; dt.setDate(dt.getDate()-wd); var key = dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0"); weeks[key] = weeks[key] || { net:0, days:0 }; weeks[key].net += r.def; weeks[key].days++; });
   var wk = Object.keys(weeks).sort();
-  if (wk.length){ h += '<h3>周账（周一至周日）</h3>'; wk.forEach(function(k){ h += '<p class="muted">'+k+' 起这周　已记 '+weeks[k].days+' 天　净缺口 '+fmt(weeks[k].net)+' kcal</p>'; }); }
+  if (wk.length){ h += '<h3>周账（周一至周日）</h3>'; wk.forEach(function(k){ var w = weeks[k]; var avgd = w.net/w.days; var rate = avgd < 0 ? "盈余周,留意" : avgd < 150 ? "偏慢" : avgd <= 350 ? "符合节奏" : "偏快,防饥饿反弹"; h += '<p class="muted">'+k+' 起这周　已记 '+w.days+' 天　净缺口 '+fmt(w.net)+' kcal　日均 '+(avgd>=0?"+":"")+fmt(avgd)+'（'+rate+'）</p>'; }); }
+  var byType = { train: { n:0, k:0, d:0 }, rest: { n:0, k:0, d:0 } };
+  logged.forEach(function(r){ var b = byType[r.type]; b.n++; b.k += r.kcal; b.d += r.def; });
+  if (byType.train.n && byType.rest.n) {
+    var ta = byType.train.d/byType.train.n, ra = byType.rest.d/byType.rest.n;
+    h += '<h3>训练日 vs 休息日</h3><p class="muted">训练 '+byType.train.n+' 天：均摄入 '+fmt(byType.train.k/byType.train.n)+' / 均缺口 '+(ta>=0?"+":"")+fmt(ta)+'<br>休息 '+byType.rest.n+' 天：均摄入 '+fmt(byType.rest.k/byType.rest.n)+' / 均缺口 '+(ra>=0?"+":"")+fmt(ra)+'<br>'+(ta > ra ? "训练日缺口更大，符合「动得多吃得多、歇得少吃得少」的好节奏。" : "休息日缺口反而更大，注意训练日别吃不够、休息日别吃多。")+'</p>';
+  }
+  var src = {}; logged.forEach(function(r){ DB.diet.forEach(function(x){ if (x.date === r.d) { src[x.food] = src[x.food] || { k:0, f:0 }; src[x.food].k += x.kcal; src[x.food].f += x.f; } }); });
+  var srcList = Object.keys(src).map(function(k){ return { name:k, k:src[k].k, f:src[k].f }; });
+  if (srcList.length){
+    var topF = srcList.slice().sort(function(a,b){ return b.f-a.f; }).slice(0,3);
+    var topK = srcList.slice().sort(function(a,b){ return b.k-a.k; }).slice(0,3);
+    h += '<h3>来源 TOP3（期内）</h3><p class="muted">脂肪来源：'+topF.map(function(x){ return x.name+" "+fmt(x.f)+"g"; }).join("、")+'<br>热量来源：'+topK.map(function(x){ return x.name+" "+fmt(x.k)+"kcal"; }).join("、")+'</p>';
+  }
+  var eP = 0, eC = 0, eF = 0; logged.forEach(function(r){ eP += r.p*4; eC += r.c*4; eF += r.f*9; });
+  var eSum = eP+eC+eF;
+  if (eSum > 0) {
+    var pP = eP/eSum*100, pC = eC/eSum*100, pF = eF/eSum*100;
+    h += '<h3>能量占比（已记天）</h3><p class="muted">蛋白 '+fmt(pP)+'% / 脂肪 '+fmt(pF)+'% / 碳水 '+fmt(pC)+'%（计划参考 蛋白28–35 / 脂肪28–35 / 碳水35–45）<br>'+(pF>35?"脂肪供能偏高。":pC<30?"碳水供能偏低，训练日补主食/水果。":pP<25?"蛋白供能偏低。":"比例接近计划。")+'</p>';
+  }
   $("anaOut").innerHTML = h;
 }
 document.querySelectorAll("nav button").forEach(function(b){
