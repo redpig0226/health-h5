@@ -544,11 +544,12 @@ function renderAdvice(){
   var rk = rem("kcal"), rp = rem("p"), rf = rem("f"), rc = rem("c");
   function txt(r, unit){ if (r[1] < 0) return "已超"+fmt(-r[1])+unit; if (r[0] <= 0) return "已达下限,最多再"+fmt(r[1])+unit; return fmt(r[0])+"–"+fmt(r[1])+unit; }
   var now = new Date(), hour = now.getHours() + now.getMinutes()/60;
+  var lateNight = hour >= 20 || hour < 6;
   var spend = spendOf(curDate), def = spend - s.kcal;
   var h = '<p class="muted">还能吃：热量 '+txt(rk,"")+'　蛋白 '+txt(rp,"g")+'<br>脂肪 '+txt(rf,"g")+'　碳水 '+txt(rc,"g")+'<br>今日估算消耗 '+fmt(spend)+' kcal，当前缺口 '+(def>=0?"+":"")+fmt(def)+' kcal（'+(curDay==="train"?"训练":"休息")+'日）</p>';
   var msgs = [];
   if (s.kcal > t.kcal[1]) msgs.push("热量已超上限，今天不再加有热量的东西；饿就选白水、清茶或黄瓜番茄类。");
-  else if (hour >= 20 && s.kcal < t.kcal[0]) msgs.push("已过20点还差"+fmt(t.kcal[0]-s.kcal)+" kcal到下限，建议睡前补一顿轻的（见推荐），长期吃不够会拖代谢和周节奏。");
+  else if (lateNight && s.kcal < t.kcal[0]) msgs.push("现在已是深夜，距下限还差"+fmt(t.kcal[0]-s.kcal)+" kcal：若已吃完就如实记、靠明天平衡，不硬补；若还饿就补一点轻的（见推荐）。");
   else if (s.kcal < t.kcal[0]) msgs.push("距区间还差"+fmt(t.kcal[0]-s.kcal)+"–"+fmt(t.kcal[1]-s.kcal)+" kcal，按餐次正常安排。");
   else msgs.push("热量在区间内，保持。");
   var gaps = [ ["蛋白", rp[0], t.p[0]], ["碳水", rc[0], t.c[0]], ["脂肪", rf[0], t.f[0]] ];
@@ -556,7 +557,7 @@ function renderAdvice(){
   var top = relGaps[0], low = relGaps[relGaps.length-1];
   if (top.rel > 0.25) msgs.push(top.name+"缺口相对最大（还差下限的"+fmt(top.rel*100)+"%），选食优先补"+top.name+"。");
   if (low.name === "脂肪" && low.rel < 0.25 && top.name !== "脂肪") msgs.push("脂肪预算余量紧张，避开油炸/奶油/坚果类。");
-  var mealNow = hour < 10 ? "早饭" : hour < 14 ? "午饭" : hour < 17 ? "加餐" : hour < 20 ? "晚饭" : "加餐";
+  var mealNow = lateNight ? "加餐" : hour < 10 ? "早饭" : hour < 14 ? "午饭" : hour < 17 ? "加餐" : "晚饭";
   var scored = DIET_TPL.map(function(tp, i){
     var it = { kcal: tp[1], p: tp[2], c: tp[3], f: tp[4] };
     function gapM(m){ return Math.max(0, t[m][0]-s[m]); }
@@ -564,14 +565,14 @@ function renderAdvice(){
     var score = Math.min(it.kcal, gapM("kcal"))*1 + Math.min(it.p, gapM("p"))*2 + Math.min(it.c, gapM("c"))*1 + Math.min(it.f, gapM("f"))*1
       - overM("kcal")*1.5 - overM("p")*1 - overM("c")*1 - overM("f")*3;
     if (tp[5] === mealNow) score += 30;
-    if (hour >= 20 && (it.kcal > 220 || it.f > 10)) score -= 40;
+    if (lateNight && (it.kcal > 220 || it.f > 10)) score -= 200;
     return { i: i, name: tp[0], score: score };
   }).sort(function(a,b){ return b.score-a.score; });
-  var picks = scored.slice(0,3);
+  var picks = lateNight ? scored.filter(function(pk){ var tp = DIET_TPL[pk.i]; return tp[1] <= 220 && tp[4] <= 10; }).slice(0,3) : scored.slice(0,3);
   h += '<p class="muted" style="margin:4px 0">'+msgs.join(" ")+'</p>';
-  if (s.kcal <= t.kcal[1]) {
+  if (s.kcal <= t.kcal[1] && picks.length) {
     h += '<div class="chips">'+picks.map(function(pk){ return '<button class="chip" onclick="tapDiet('+pk.i+')">'+pk.name+'</button>'; }).join("")+'</div>';
-    h += '<p class="muted" style="margin-top:4px">以上为当前剩余预算下最合适的3项（优先'+mealNow+'时段），点一下直接记。</p>';
+    h += '<p class="muted" style="margin-top:4px">以上为当前剩余预算下最合适的项（优先'+mealNow+'时段），点一下直接记。</p>';
   }
   el.innerHTML = h;
 }
