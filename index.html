@@ -219,6 +219,17 @@
     </div>
   </section>
 
+  <!-- 分析 -->
+  <section id="tab-ana" class="hidden">
+    <div class="card">
+      <h3>趋势分析</h3>
+      <div class="seg" style="margin-bottom:8px">
+        <button id="rng7" class="on" onclick="setRange(7)">近7天</button><button id="rng14" onclick="setRange(14)">近14天</button><button id="rng30" onclick="setRange(30)">近30天</button>
+      </div>
+      <div id="anaOut"></div>
+    </div>
+  </section>
+
   <!-- 同步 -->
   <section id="tab-sync" class="hidden">
     <div class="card">
@@ -255,6 +266,7 @@
   <button data-t="ex">运动</button>
   <button data-t="daily">每日</button>
   <button data-t="body">身体</button>
+  <button data-t="ana">分析</button>
   <button data-t="sync">同步<span id="syncBadge"></span></button>
 </nav>
 
@@ -460,7 +472,7 @@ function refreshPhotoCounts(){
     idbByEntry(key).then(function(rs){ photoCounts[key] = rs.length; var el = $(k+"PhotoCount"); if (el) el.textContent = rs.length ? "（"+rs.length+"张）" : ""; });
   });
 }
-function renderAll(){ renderSum(); renderLists(); refreshPhotoCounts(); }
+function renderAll(){ renderSum(); renderLists(); refreshPhotoCounts(); renderAna(); }
 
 var lastSyncText = "";
 function genSync(){
@@ -521,17 +533,76 @@ function clearAll(){
   DB = { diet: [], ex: [], daily: {}, body: {} }; save(); renderAll(); loadDailyForm();
 }
 
+var anaRange = 7;
+function setRange(n){ anaRange = n; ["rng7","rng14","rng30"].forEach(function(i){ $(i).classList.remove("on"); }); $("rng"+n).classList.add("on"); renderAna(); }
+function dayTypeOf(d){ if (DB.dayType && DB.dayType[d]) return DB.dayType[d]; return sumEx(d) >= 200 ? "train" : "rest"; }
+function dateMinus(n){ var t = new Date(); t.setDate(t.getDate()-n); return t.getFullYear()+"-"+String(t.getMonth()+1).padStart(2,"0")+"-"+String(t.getDate()).padStart(2,"0"); }
+function spendOf(d){ var t = dayTypeOf(d); return TDEE[t] + Math.max(0, sumEx(d) - (t==="train"?260:0)); }
+function svgBars(vals, colors, lineVals, lineColor, yMax, h, labels, refLine, refColor){
+  var W = 340, n = vals.length, bw = W/n;
+  var s = '<svg viewBox="0 0 '+W+' '+h+'" style="width:100%;height:auto;display:block">';
+  function y(v){ return h - 6 - (v/yMax)*(h-16); }
+  if (refLine != null){ s += '<line x1="0" x2="'+W+'" y1="'+y(refLine)+'" y2="'+y(refLine)+'" stroke="'+refColor+'" stroke-dasharray="4 3" stroke-width="1"/>'; }
+  for (var i=0;i<n;i++){
+    var v = vals[i]||0;
+    if (v>0) s += '<rect x="'+(i*bw+2)+'" y="'+y(v)+'" width="'+(bw-4)+'" height="'+(h-6-y(v))+'" rx="2" fill="'+colors[i]+'"/>';
+    if (labels) s += '<text x="'+(i*bw+bw/2)+'" y="'+(h-1)+'" font-size="7" text-anchor="middle" fill="#8a948e">'+labels[i]+'</text>';
+  }
+  if (lineVals){ var pts = lineVals.map(function(v,i){ return (i*bw+bw/2)+","+y(v); }).join(" "); s += '<polyline points="'+pts+'" fill="none" stroke="'+lineColor+'" stroke-width="1.5"/>'; }
+  s += '</svg>';
+  return s;
+}
+function svgLine(pts, h, yMin, yMax, color, labels){
+  var W = 340, n = pts.length;
+  var s = '<svg viewBox="0 0 '+W+' '+h+'" style="width:100%;height:auto;display:block">';
+  function y(v){ return h - 6 - ((v-yMin)/((yMax-yMin)||1))*(h-16); }
+  var step = n>1 ? (W-20)/(n-1) : 0;
+  var pl = pts.map(function(p,i){ return (10+i*step)+","+y(p.v); }).join(" ");
+  s += '<polyline points="'+pl+'" fill="none" stroke="'+color+'" stroke-width="1.5"/>';
+  pts.forEach(function(p,i){ s += '<circle cx="'+(10+i*step)+'" cy="'+y(p.v)+'" r="2.5" fill="'+color+'"/><text x="'+(10+i*step)+'" y="'+(y(p.v)-5)+'" font-size="7" text-anchor="middle" fill="#5c6660">'+p.v+'</text>'; if(labels) s += '<text x="'+(10+i*step)+'" y="'+(h-1)+'" font-size="7" text-anchor="middle" fill="#8a948e">'+p.l+'</text>'; });
+  s += '</svg>';
+  return s;
+}
+function renderAna(){
+  var dates = []; for (var i=anaRange-1;i>=0;i--) dates.push(dateMinus(i));
+  var rows = dates.map(function(d){ var s = sumDiet(d); return { d:d, type:dayTypeOf(d), kcal:s.kcal, p:s.p, c:s.c, f:s.f, spend:spendOf(d), def:spendOf(d)-s.kcal, daily:DB.daily[d]||{}, has:s.kcal>0 }; });
+  var logged = rows.filter(function(r){ return r.has; });
+  var net = rows.reduce(function(a,r){ return a + (r.has ? r.def : 0); }, 0);
+  var avg = logged.length ? logged.reduce(function(a,r){ return a+r.kcal; },0)/logged.length : 0;
+  var inRange = logged.filter(function(r){ var t=TARGETS[r.type]; return r.kcal>=t.kcal[0]&&r.kcal<=t.kcal[1]; }).length;
+  var wOk = logged.filter(function(r){ return (r.daily.water_ml||0)>=2000; }).length;
+  var sOk = logged.filter(function(r){ return (r.daily.sleep_h||0)>=7; }).length;
+  var h = '<p class="muted">已记 '+logged.length+' 天 / '+anaRange+' 天　平均摄入 '+fmt(avg)+' kcal　累计缺口 '+fmt(net)+' kcal（≈'+fmt(Math.abs(net)/7700*1000)+'g 脂肪，'+(net>=0?'已消耗':'已储存')+'）<br>热量区间内 '+inRange+' 天　水≥2000ml '+wOk+' 天　睡≥7h '+sOk+' 天</p>';
+  var labels = rows.map(function(r){ return r.d.slice(8); });
+  var yMax = Math.max.apply(null, rows.map(function(r){ return Math.max(r.kcal, r.spend); }).concat([1500]))*1.12;
+  h += '<h3>热量：柱=摄入（绿=区间内/红=超/黄=不足），线=估算消耗</h3>';
+  h += svgBars(rows.map(function(r){return r.kcal;}), rows.map(function(r){ var t=TARGETS[r.type]; return r.kcal>t.kcal[1] ? "#c66a6a" : (r.kcal<t.kcal[0] ? "#d8b25e" : "#7fa98f"); }), rows.map(function(r){return r.spend;}), "#5c6660", yMax, 120, labels, null, null);
+  var sl = rows.map(function(r){ return r.daily.sleep_h||0; });
+  var wt = rows.map(function(r){ return r.daily.water_ml||0; });
+  h += '<h3>睡眠 h（虚线=7h）</h3>'+svgBars(sl, sl.map(function(v){ return v>=7?"#7fa98f":"#d8b25e"; }), null, null, Math.max(10, Math.max.apply(null, sl.concat([8]))*1.2), 90, labels, 7, "#5c6660");
+  h += '<h3>白水 ml（虚线=2000）</h3>'+svgBars(wt, wt.map(function(v){ return v>=2000?"#7fa98f":"#d8b25e"; }), null, null, Math.max(2400, Math.max.apply(null, wt.concat([2000]))*1.15), 90, labels, 2000, "#5c6660");
+  var bp = []; Object.keys(DB.body).sort().forEach(function(k){ if (dates.indexOf(k)>=0 && DB.body[k].weight_kg) bp.push({ v:DB.body[k].weight_kg, l:k.slice(8) }); });
+  if (bp.length>=2){ var wmin=Math.min.apply(null,bp.map(function(p){return p.v;}))-0.5, wmax=Math.max.apply(null,bp.map(function(p){return p.v;}))+0.5; h += '<h3>体重 kg</h3>'+svgLine(bp, 100, wmin, wmax, "#6a89c6", true); }
+  else if (bp.length===1){ h += '<p class="muted">体重：期内仅1次测量（'+bp[0].v+'kg），满2次后画曲线</p>'; }
+  var mp = logged.length? { p: logged.reduce(function(a,r){return a+r.p;},0)/logged.length, c: logged.reduce(function(a,r){return a+r.c;},0)/logged.length, f: logged.reduce(function(a,r){return a+r.f;},0)/logged.length } : null;
+  if (mp){ h += '<h3>三大营养素平均（已记天）</h3><p class="muted">蛋白 '+fmt(mp.p)+'（休息95–105 / 训练108–115）<br>脂肪 '+fmt(mp.f)+'（休息42–50 / 训练45–52）<br>碳水 '+fmt(mp.c)+'（休息110–140 / 训练150–175）</p>'; }
+  var weeks = {}; rows.forEach(function(r){ if(!r.has) return; var dt = new Date(r.d); var wd = (dt.getDay()+6)%7; dt.setDate(dt.getDate()-wd); var key = dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0"); weeks[key] = weeks[key] || { net:0, days:0 }; weeks[key].net += r.def; weeks[key].days++; });
+  var wk = Object.keys(weeks).sort();
+  if (wk.length){ h += '<h3>周账（周一至周日）</h3>'; wk.forEach(function(k){ h += '<p class="muted">'+k+' 起这周　已记 '+weeks[k].days+' 天　净缺口 '+fmt(weeks[k].net)+' kcal</p>'; }); }
+  $("anaOut").innerHTML = h;
+}
 document.querySelectorAll("nav button").forEach(function(b){
   b.addEventListener("click", function(){
     document.querySelectorAll("nav button").forEach(function(x){ x.classList.remove("on"); });
     b.classList.add("on");
-    ["diet","ex","daily","body","sync"].forEach(function(t){ $("tab-"+t).classList.add("hidden"); });
+    ["diet","ex","daily","body","ana","sync"].forEach(function(t){ $("tab-"+t).classList.add("hidden"); });
     $("tab-"+b.dataset.t).classList.remove("hidden");
+    if (b.dataset.t === "ana") renderAna();
   });
 });
 $("date").addEventListener("change", function(){ curDate = this.value || today(); loadDailyForm(); renderAll(); });
-$("dayRest").addEventListener("click", function(){ curDay="rest"; this.classList.add("on"); $("dayTrain").classList.remove("on"); renderSum(); });
-$("dayTrain").addEventListener("click", function(){ curDay="train"; this.classList.add("on"); $("dayRest").classList.remove("on"); renderSum(); });
+$("dayRest").addEventListener("click", function(){ curDay="rest"; this.classList.add("on"); $("dayTrain").classList.remove("on"); DB.dayType = DB.dayType || {}; DB.dayType[curDate] = "rest"; save(); renderSum(); });
+$("dayTrain").addEventListener("click", function(){ curDay="train"; this.classList.add("on"); $("dayRest").classList.remove("on"); DB.dayType = DB.dayType || {}; DB.dayType[curDate] = "train"; save(); renderSum(); });
 
 $("date").value = curDate;
 $("dPhotos").addEventListener("change", function(){ onPhotos(this, "diet"); });
